@@ -60,6 +60,8 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 struct Uniforms {
     resolution: vec2<f32>,
+    time: f32,
+    padding: f32,
 };
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
@@ -69,11 +71,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let eye = vec3<f32>(0.0, 0.0, 5.0);
     let dir = rayDirection(45.0, vec2<f32>(1.0, 1.0), in.tex_coords);
     let dist = shortestDistanceToSurface(eye, dir, MIN_DIST, MAX_DIST);
+    let time = uniforms.time;
 
     if dist > MAX_DIST - EPSILON {
         // Didn't hit anything
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    return vec4<f32>(time % 1.0, 0.0, 0.0, 1.0);
 }

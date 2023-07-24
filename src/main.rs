@@ -11,50 +11,66 @@ use winit::{
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct Uniforms {
     resolution: [f32; 2],
+    time: f32,
+    padding: f32,
 }
 
 fn main() {
     let event_loop = EventLoop::new();
     let window = winit::window::Window::new(&event_loop).unwrap();
-    pollster::block_on(run(event_loop, window));
+    let start_time = std::time::Instant::now();
+    pollster::block_on(run(event_loop, window, start_time));
 }
 
-async fn run(event_loop: EventLoop<()>, window: Window) {
+async fn run(event_loop: EventLoop<()>, window: Window, start_time: std::time::Instant) {
     let instance = create_instance();
     let surface = unsafe { create_surface(&instance, &window) };
     let (adapter, device, queue) = create_device_queue(&instance, &surface).await;
     let shader = create_shader(&device);
-    let uniforms = create_uniforms(&window);
+
+    let size = window.inner_size();
+    let uniforms = create_uniforms(&window, start_time);
     let uniform_buffer = create_uniform_buffer(&device, uniforms);
+
     let (bind_group_layout, bind_group) = create_bind_group(&device, &uniform_buffer);
     let pipeline_layout = create_pipeline_layout(&device, &bind_group_layout);
+
     let (swapchain_capabilities, swapchain_format) =
         get_swapchain_caps_and_format(&surface, &adapter);
     let render_pipeline =
         create_render_pipeline(&device, &shader, &pipeline_layout, swapchain_format);
 
-    let size = window.inner_size();
     let mut config = create_surface_config(&swapchain_capabilities, swapchain_format, size);
     surface.configure(&device, &config);
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::Poll;
         match event {
             Event::WindowEvent {
-                event: WindowEvent::Resized(size),
+                event: WindowEvent::Resized(new_size),
                 ..
             } => {
-                config.width = size.width;
-                config.height = size.height;
+                config.width = new_size.width;
+                config.height = new_size.height;
                 surface.configure(&device, &config);
+            }
+            Event::MainEventsCleared => {
+                // Redraw request after all other events are finished processing
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
-                let frame = create_frame(&surface);
+                let frame = surface
+                    .get_current_texture()
+                    .expect("Failed to acquire next swap chain texture");
                 let view = frame
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
-                let mut encoder = create_command_encoder(&device);
+
+                let uniforms = create_uniforms(&window, start_time);
+                queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
                 {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
@@ -72,7 +88,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                     rpass.set_bind_group(0, &bind_group, &[]);
                     rpass.draw(0..6, 0..1);
                 }
-
                 queue.submit(Some(encoder.finish()));
                 frame.present();
             }
@@ -132,10 +147,13 @@ fn create_shader(device: &wgpu::Device) -> wgpu::ShaderModule {
     })
 }
 
-fn create_uniforms(window: &Window) -> Uniforms {
+fn create_uniforms(window: &Window, start_time: std::time::Instant) -> Uniforms {
     let size = window.inner_size();
+    let elapsed = start_time.elapsed().as_secs_f32();
     Uniforms {
         resolution: [size.width as f32, size.height as f32],
+        time: elapsed,
+        padding: 0.0,
     }
 }
 
@@ -237,14 +255,4 @@ fn create_surface_config(
         alpha_mode: swapchain_capabilities.alpha_modes[0],
         view_formats: vec![],
     }
-}
-
-fn create_frame(surface: &wgpu::Surface) -> wgpu::SurfaceTexture {
-    surface
-        .get_current_texture()
-        .expect("Failed to acquire next swap chain texture")
-}
-
-fn create_command_encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
-    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
 }
